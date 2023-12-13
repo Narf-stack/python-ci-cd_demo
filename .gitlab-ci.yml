@@ -1,0 +1,58 @@
+# Variables defined on pipeline level, available for every job
+variables:
+    IMAGE_NAME: narfstack/demo-ci-cd
+    IMAGE_TAG: python-app-1.0
+
+# Define stages to ensure the run of the jobs in a specific order
+stages:
+    - test
+    - build
+    - deploy 
+# Job to launch test
+run_tests:
+    # named the related stage
+    stage: test 
+    # specify to the git lab runner to use python, default is ruby
+    image: python:3.9-slim
+    before_script:
+        # install make command. Always update before install to avoid installing old version
+        - apt-get update && apt-get install make
+    script:
+        - make test
+# Job to build docker images from docker file
+build_image:
+    # named the related stage
+    stage: build 
+    # build docker container with docker image which makes docker command or client available inside container ( Docker-in-Docker)
+    image: docker:24.0.7-cli
+    services:
+    # service is an aditional container that will start at the same time as the job container
+    # It can be use by the job container during the build timne
+    # Why? Easier and faster to use an existing image and run it as an additional container than to install mysql for example, every time job
+    #runs - installing mysql instead of using container
+
+    # make the or docker daemon available ( should be the same version as docker image above)
+        - docker:24.0.7-dind
+    # Variables defined on the job level, only available in this job
+    variables:
+        # variable for the certificate directory that will allow the communication between the job and service containers
+        DOCKER_TLS_CERTDIR: "/certs"
+    before_script:
+        # Authenticate to docker
+        - docker login -u $DOCKER_USER -p $REGISTRY_PASS
+    script:
+        # build the image from the doker hub repository
+        - docker build -t $IMAGE_NAME:$IMAGE_TAG .
+        # Push the docker image to the docker repository
+        - docker push $IMAGE_NAME:$IMAGE_TAG
+
+.deploy: # the "." in front of deploy is to skip the job because PUBLIC_IP_ADRESS_OF_THE_REMOTE_SERVER is not defined there
+    stage: deploy
+    before_script:
+        # restrict access permissions to the ssh key file 
+        - chmod 400 $SSH_KEY 
+    script:
+        - ssh -o StrictHostKeyCheking=no -i $SSH_KEY root@ADD_PUBLIC_IP_ADRESS_OF_THE_REMOTE_SERVER "
+            docker login -u $DOCKER_USER -p $REGISTRY_PASS &&
+            docker ps -aq | xargs docker stop | xargs docker rm &&
+            docker run -d -p 5000:5000 $IMAGE_NAME:$IMAGE_TAG"
